@@ -1,0 +1,5 @@
+node_modules/
+.env
+uploads/
+scratch/
+package-lock.json
