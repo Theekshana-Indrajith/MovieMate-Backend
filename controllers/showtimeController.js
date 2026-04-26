@@ -7,17 +7,65 @@ const Showtime = require('../models/Showtime');
 exports.getShowtimes = async (req, res, next) => {
     try {
         let query;
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
         if (req.params.movieId) {
-            query = Showtime.find({ movie: req.params.movieId }).populate('movie', 'title genre duration poster');
+            query = Showtime.find({ 
+                movie: req.params.movieId,
+                date: { $gte: startOfToday }
+            }).populate('movie', 'title genre duration poster');
         } else {
-            query = Showtime.find().populate('movie', 'title genre duration poster');
+            query = Showtime.find({
+                date: { $gte: startOfToday }
+            }).populate('movie', 'title genre duration poster');
         }
 
-        const showtimes = await query;
-        res.status(200).json({ success: true, count: showtimes.length, data: showtimes });
+        let showtimes = await query;
+
+        // Filter out past times for today's shows
+        const filteredShowtimes = showtimes.map(st => {
+            const stDate = new Date(st.date);
+            const isToday = stDate.toDateString() === now.toDateString();
+
+            if (isToday) {
+                // Filter the 'times' array
+                const validTimes = st.times.filter(t => {
+                    const showDateTime = parseTimeString(t, st.date);
+                    return showDateTime > now;
+                });
+                
+                if (validTimes.length === 0) return null;
+                
+                // Return a copy with filtered times
+                const stObj = st.toObject();
+                stObj.times = validTimes;
+                return stObj;
+            }
+            return st;
+        }).filter(st => st !== null);
+
+        res.status(200).json({ success: true, count: filteredShowtimes.length, data: filteredShowtimes });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
     }
+};
+
+// Helper function to parse '10:30 AM' style strings
+const parseTimeString = (timeStr, baseDate) => {
+    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!match) return new Date(0);
+    
+    let [ , hours, minutes, modifier] = match;
+    hours = parseInt(hours, 10);
+    minutes = parseInt(minutes, 10);
+
+    if (modifier.toUpperCase() === 'PM' && hours < 12) hours += 12;
+    if (modifier.toUpperCase() === 'AM' && hours === 12) hours = 0;
+
+    const date = new Date(baseDate);
+    date.setHours(hours, minutes, 0, 0);
+    return date;
 };
 
 // Helper function to check overlap
@@ -52,15 +100,36 @@ exports.createShowtime = async (req, res, next) => {
         }
 
         const { movie, date, endDate, times, ticketPrice, image } = req.body;
+        const now = new Date();
+        const tenHoursFromNow = new Date(now.getTime() + 10 * 60 * 60 * 1000);
+
+        const validateShowTime = (d, tList) => {
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const checkDate = new Date(d);
+            
+            if (checkDate < startOfToday) {
+                throw new Error(`Cannot add showtime for a past date: ${checkDate.toDateString()}`);
+            }
+
+            for (let t of tList) {
+                const showDateTime = parseTimeString(t, d);
+                if (showDateTime < tenHoursFromNow) {
+                    throw new Error(`Showtime (${t} on ${checkDate.toDateString()}) must be scheduled at least 10 hours in advance.`);
+                }
+            }
+        };
 
         if (endDate) {
             let currentDate = new Date(date);
             const stopDate = new Date(endDate);
             let showtimesToCreate = [];
 
-            // 1. Verify all dates have no overlap first
+            // 1. Verify all dates have no overlap and follow 10-hour rule
             let tempDate = new Date(date);
             while (tempDate <= stopDate) {
+                // Validation: Past date and 10-hour rule
+                validateShowTime(tempDate, times);
+
                 const overlap = await checkOverlap(tempDate, times);
                 if (overlap.hasOverlap) {
                     return res.status(400).json({ success: false, error: `Time slot ${overlap.time} is already booked for another movie on ${overlap.date}` });
@@ -83,6 +152,9 @@ exports.createShowtime = async (req, res, next) => {
             const showtimes = await Showtime.insertMany(showtimesToCreate);
             return res.status(201).json({ success: true, count: showtimes.length, data: showtimes });
         } else {
+            // Validation for single creation
+            validateShowTime(date, times);
+
             // Check overlap for single creation
             const overlap = await checkOverlap(date, times);
             if (overlap.hasOverlap) {
