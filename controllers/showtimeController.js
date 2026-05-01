@@ -99,7 +99,14 @@ exports.createShowtime = async (req, res, next) => {
             req.body.image = req.file.filename;
         }
 
-        const { movie, date, endDate, times, ticketPrice, image } = req.body;
+        const rawTimes = req.body.times || req.body['times[]'];
+        const times = Array.isArray(rawTimes) ? rawTimes : (typeof rawTimes === 'string' ? [rawTimes] : []);
+        
+        if (times.length === 0) {
+            return res.status(400).json({ success: false, error: 'Showtimes are required' });
+        }
+
+        const { movie, date, endDate, ticketPrice, image } = req.body;
         const now = new Date();
         const tenHoursFromNow = new Date(now.getTime() + 10 * 60 * 60 * 1000);
 
@@ -176,6 +183,11 @@ exports.updateShowtime = async (req, res, next) => {
     try {
         if (req.file) {
             req.body.image = req.file.filename;
+        }
+
+        const rawTimes = req.body.times || req.body['times[]'];
+        if (rawTimes) {
+            req.body.times = Array.isArray(rawTimes) ? rawTimes : (typeof rawTimes === 'string' ? [rawTimes] : []);
         }
 
         const { endDate, ...updateData } = req.body;
