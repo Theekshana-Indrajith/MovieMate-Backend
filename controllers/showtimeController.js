@@ -111,6 +111,36 @@ const checkOverlap = async (checkingDate, checkingTimes, excludeId = null) => {
     return { hasOverlap: false };
 };
 
+// Helper function to validate showtime constraints (past dates, 10-hour rule, operating hours)
+const validateShowTimeConstraints = (d, tList) => {
+    const now = new Date();
+    const tenHoursFromNow = new Date(now.getTime() + 10 * 60 * 60 * 1000);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const checkDate = new Date(d);
+    
+    if (checkDate < startOfToday) {
+        throw new Error(`Cannot schedule showtime for a past date.`);
+    }
+
+    for (let t of tList) {
+        const showDateTime = parseTimeString(t, d);
+        const hours = showDateTime.getHours();
+        const minutes = showDateTime.getMinutes();
+
+        // Operating Hours Check (8 AM to 11 PM)
+        if (hours < 8) {
+            throw new Error(`Showtime (${t}) is before operating hours. The first show can only be at 08:00 AM or later.`);
+        }
+        if (hours > 23 || (hours === 23 && minutes > 0)) {
+            throw new Error(`Showtime (${t}) is after operating hours. The last show must start by 11:00 PM.`);
+        }
+
+        if (showDateTime < tenHoursFromNow) {
+            throw new Error(`Showtime (${t}) is too soon. It must be scheduled at least 10 hours in advance.`);
+        }
+    }
+};
+
 // @desc    Create new showtime (Supports date ranges)
 // @route   POST /api/showtimes
 // @access  Private (Admin)
@@ -130,35 +160,6 @@ exports.createShowtime = async (req, res, next) => {
         req.body.times = times; // FIX: Mongoose needs this in req.body
 
         const { movie, date, endDate, ticketPrice, image } = req.body;
-        const now = new Date();
-        const tenHoursFromNow = new Date(now.getTime() + 10 * 60 * 60 * 1000);
-
-        const validateShowTime = (d, tList) => {
-            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const checkDate = new Date(d);
-            
-            if (checkDate < startOfToday) {
-                throw new Error(`Cannot add showtime for a past date.`);
-            }
-
-            for (let t of tList) {
-                const showDateTime = parseTimeString(t, d);
-                const hours = showDateTime.getHours();
-                const minutes = showDateTime.getMinutes();
-
-                // Operating Hours Check (8 AM to 11 PM)
-                if (hours < 8) {
-                    throw new Error(`Showtime (${t}) is before operating hours. The first show can only be at 08:00 AM or later.`);
-                }
-                if (hours > 23 || (hours === 23 && minutes > 0)) {
-                    throw new Error(`Showtime (${t}) is after operating hours. The last show must start by 11:00 PM.`);
-                }
-
-                if (showDateTime < tenHoursFromNow) {
-                    throw new Error(`Showtime (${t}) is too soon. It must be scheduled at least 10 hours in advance.`);
-                }
-            }
-        };
 
         if (endDate) {
             let currentDate = new Date(date);
@@ -169,7 +170,7 @@ exports.createShowtime = async (req, res, next) => {
             let tempDate = new Date(date);
             while (tempDate <= stopDate) {
                 // Validation: Past date and 10-hour rule
-                validateShowTime(tempDate, times);
+                validateShowTimeConstraints(tempDate, times);
 
                 const overlap = await checkOverlap(tempDate, times);
                 if (overlap.hasOverlap) {
@@ -194,7 +195,7 @@ exports.createShowtime = async (req, res, next) => {
             return res.status(201).json({ success: true, count: showtimes.length, data: showtimes });
         } else {
             // Validation for single creation
-            validateShowTime(date, times);
+            validateShowTimeConstraints(date, times);
 
             // Check overlap for single creation
             const overlap = await checkOverlap(date, times);
@@ -232,6 +233,9 @@ exports.updateShowtime = async (req, res, next) => {
         const dateToCheck = updateData.date || currentShowtime.date;
         const timesToCheck = updateData.times || currentShowtime.times;
 
+        // Validation for the update
+        validateShowTimeConstraints(dateToCheck, timesToCheck);
+
         // 1. Check overlap for the primary update date
         const overlap = await checkOverlap(dateToCheck, timesToCheck, req.params.id);
         if (overlap.hasOverlap) {
@@ -248,6 +252,8 @@ exports.updateShowtime = async (req, res, next) => {
             // 2. Validate all extension dates
             let tempDate = new Date(currentDate);
             while (tempDate <= stopDate) {
+                validateShowTimeConstraints(tempDate, timesToCheck);
+                
                 const extendOverlap = await checkOverlap(tempDate, timesToCheck);
                 if (extendOverlap.hasOverlap) {
                     return res.status(400).json({ success: false, error: `Update cancelled. ${extendOverlap.error}` });
