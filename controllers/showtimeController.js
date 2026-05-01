@@ -70,7 +70,7 @@ const parseTimeString = (timeStr, baseDate) => {
     return date;
 };
 
-// Helper function to check overlap
+// Helper function to check overlap and 3-hour gap
 const checkOverlap = async (checkingDate, checkingTimes, excludeId = null) => {
     // We normalize to ignore time parts in the DB check
     const d = new Date(checkingDate);
@@ -81,11 +81,30 @@ const checkOverlap = async (checkingDate, checkingTimes, excludeId = null) => {
     if (excludeId) query._id = { $ne: excludeId };
 
     const existingShowtimes = await Showtime.find(query);
+    const newTimesParsed = checkingTimes.map(t => ({ original: t, parsed: parseTimeString(t, checkingDate) }));
 
+    // 1. Check gap within the checkingTimes themselves (if admin inputs multiple times at once)
+    for (let i = 0; i < newTimesParsed.length; i++) {
+        for (let j = i + 1; j < newTimesParsed.length; j++) {
+            const diffHours = Math.abs(newTimesParsed[i].parsed - newTimesParsed[j].parsed) / (1000 * 60 * 60);
+            if (diffHours < 3) {
+                return { hasOverlap: true, error: `Cannot schedule both ${newTimesParsed[i].original} and ${newTimesParsed[j].original}. There must be at least a 3-hour gap between shows.` };
+            }
+        }
+    }
+
+    // 2. Check gap against existing showtimes in the DB
     for (let st of existingShowtimes) {
-        for (let t of checkingTimes) {
-            if (st.times.includes(t)) {
-                return { hasOverlap: true, time: t, date: d.toDateString() };
+        for (let newT of newTimesParsed) {
+            for (let existingT of st.times) {
+                const existingTParsed = parseTimeString(existingT, checkingDate);
+                const diffHours = Math.abs(newT.parsed - existingTParsed) / (1000 * 60 * 60);
+                
+                if (diffHours === 0) {
+                    return { hasOverlap: true, error: `Time slot ${newT.original} is already booked on ${d.toDateString()}.` };
+                } else if (diffHours < 3) {
+                    return { hasOverlap: true, error: `Cannot schedule ${newT.original}. There is already a show at ${existingT} on ${d.toDateString()}. (Requires 3-hour gap)` };
+                }
             }
         }
     }
@@ -119,13 +138,24 @@ exports.createShowtime = async (req, res, next) => {
             const checkDate = new Date(d);
             
             if (checkDate < startOfToday) {
-                throw new Error(`Cannot add showtime for a past date. (Input: ${checkDate.toISOString()}, StartOfToday: ${startOfToday.toISOString()})`);
+                throw new Error(`Cannot add showtime for a past date.`);
             }
 
             for (let t of tList) {
                 const showDateTime = parseTimeString(t, d);
+                const hours = showDateTime.getHours();
+                const minutes = showDateTime.getMinutes();
+
+                // Operating Hours Check (8 AM to 11 PM)
+                if (hours < 8) {
+                    throw new Error(`Showtime (${t}) is before operating hours. The first show can only be at 08:00 AM or later.`);
+                }
+                if (hours > 23 || (hours === 23 && minutes > 0)) {
+                    throw new Error(`Showtime (${t}) is after operating hours. The last show must start by 11:00 PM.`);
+                }
+
                 if (showDateTime < tenHoursFromNow) {
-                    throw new Error(`Showtime (${t}) is too soon. It must be 10 hours in advance. (ShowTime UTC: ${showDateTime.toISOString()}, 10hFromNow UTC: ${tenHoursFromNow.toISOString()})`);
+                    throw new Error(`Showtime (${t}) is too soon. It must be scheduled at least 10 hours in advance.`);
                 }
             }
         };
@@ -143,7 +173,7 @@ exports.createShowtime = async (req, res, next) => {
 
                 const overlap = await checkOverlap(tempDate, times);
                 if (overlap.hasOverlap) {
-                    return res.status(400).json({ success: false, error: `Time slot ${overlap.time} is already booked for another movie on ${overlap.date}` });
+                    return res.status(400).json({ success: false, error: overlap.error });
                 }
                 tempDate.setDate(tempDate.getDate() + 1);
             }
@@ -169,7 +199,7 @@ exports.createShowtime = async (req, res, next) => {
             // Check overlap for single creation
             const overlap = await checkOverlap(date, times);
             if (overlap.hasOverlap) {
-                return res.status(400).json({ success: false, error: `Time slot ${overlap.time} is already booked for another movie on ${overlap.date}` });
+                return res.status(400).json({ success: false, error: overlap.error });
             }
 
             const showtime = await Showtime.create(req.body);
@@ -205,7 +235,7 @@ exports.updateShowtime = async (req, res, next) => {
         // 1. Check overlap for the primary update date
         const overlap = await checkOverlap(dateToCheck, timesToCheck, req.params.id);
         if (overlap.hasOverlap) {
-            return res.status(400).json({ success: false, error: `Time slot ${overlap.time} is already booked for another movie on ${overlap.date}` });
+            return res.status(400).json({ success: false, error: overlap.error });
         }
 
         // Generate extra showtimes if admin provided an end date to extend from this edit
@@ -220,7 +250,7 @@ exports.updateShowtime = async (req, res, next) => {
             while (tempDate <= stopDate) {
                 const extendOverlap = await checkOverlap(tempDate, timesToCheck);
                 if (extendOverlap.hasOverlap) {
-                    return res.status(400).json({ success: false, error: `Extended time slot ${extendOverlap.time} is already booked on ${extendOverlap.date}. Update cancelled.` });
+                    return res.status(400).json({ success: false, error: `Update cancelled. ${extendOverlap.error}` });
                 }
                 tempDate.setDate(tempDate.getDate() + 1);
             }
