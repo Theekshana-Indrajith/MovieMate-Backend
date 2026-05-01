@@ -105,6 +105,8 @@ exports.createShowtime = async (req, res, next) => {
         if (times.length === 0) {
             return res.status(400).json({ success: false, error: 'Showtimes are required' });
         }
+        
+        req.body.times = times; // FIX: Mongoose needs this in req.body
 
         const { movie, date, endDate, ticketPrice, image } = req.body;
         const now = new Date();
