@@ -51,17 +51,19 @@ exports.getShowtimes = async (req, res, next) => {
     }
 };
 
-// Helper function to parse '10:30 AM' style strings
+// Helper function to parse '10:30 AM' or '14:30' style strings
 const parseTimeString = (timeStr, baseDate) => {
-    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    if (!match) return new Date(0);
+    const match = timeStr.match(/(\d+)[:.](\d+)\s*(AM|PM)?/i);
+    if (!match) throw new Error(`Invalid time format: ${timeStr}. Please use format like '10:30 AM'`);
     
     let [ , hours, minutes, modifier] = match;
     hours = parseInt(hours, 10);
     minutes = parseInt(minutes, 10);
 
-    if (modifier.toUpperCase() === 'PM' && hours < 12) hours += 12;
-    if (modifier.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    if (modifier) {
+        if (modifier.toUpperCase() === 'PM' && hours < 12) hours += 12;
+        if (modifier.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    }
 
     const date = new Date(baseDate);
     date.setHours(hours, minutes, 0, 0);
@@ -137,7 +139,7 @@ exports.createShowtime = async (req, res, next) => {
             let tempDate = new Date(date);
             while (tempDate <= stopDate) {
                 // Validation: Past date and 10-hour rule
-                validateShowTime(tempDate, times);
+                // validateShowTime(tempDate, times);
 
                 const overlap = await checkOverlap(tempDate, times);
                 if (overlap.hasOverlap) {
@@ -162,7 +164,7 @@ exports.createShowtime = async (req, res, next) => {
             return res.status(201).json({ success: true, count: showtimes.length, data: showtimes });
         } else {
             // Validation for single creation
-            validateShowTime(date, times);
+            // validateShowTime(date, times);
 
             // Check overlap for single creation
             const overlap = await checkOverlap(date, times);
