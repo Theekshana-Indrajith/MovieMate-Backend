@@ -253,6 +253,10 @@ exports.getAdminStats = async (req, res) => {
 
         // Also get pending booking count
         const pendingCount = await Booking.countDocuments({ status: 'Pending' });
+        
+        // Also get pending snack order count
+        const SnackOrder = require('../models/SnackOrder');
+        const pendingOrders = await SnackOrder.countDocuments({ status: 'Pending' });
 
         res.status(200).json({
             success: true,
@@ -261,6 +265,7 @@ exports.getAdminStats = async (req, res) => {
                 todayRevenue,
                 totalBookings: bookings.length,
                 pendingBookings: pendingCount,
+                pendingOrders, // Added pending orders count
                 topMovies
             }
         });
