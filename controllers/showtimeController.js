@@ -119,13 +119,13 @@ exports.createShowtime = async (req, res, next) => {
             const checkDate = new Date(d);
             
             if (checkDate < startOfToday) {
-                throw new Error(`Cannot add showtime for a past date: ${checkDate.toDateString()}`);
+                throw new Error(`Cannot add showtime for a past date. (Input: ${checkDate.toISOString()}, StartOfToday: ${startOfToday.toISOString()})`);
             }
 
             for (let t of tList) {
                 const showDateTime = parseTimeString(t, d);
                 if (showDateTime < tenHoursFromNow) {
-                    throw new Error(`Showtime (${t} on ${checkDate.toDateString()}) must be scheduled at least 10 hours in advance.`);
+                    throw new Error(`Showtime (${t}) is too soon. It must be 10 hours in advance. (ShowTime UTC: ${showDateTime.toISOString()}, 10hFromNow UTC: ${tenHoursFromNow.toISOString()})`);
                 }
             }
         };
@@ -139,7 +139,7 @@ exports.createShowtime = async (req, res, next) => {
             let tempDate = new Date(date);
             while (tempDate <= stopDate) {
                 // Validation: Past date and 10-hour rule
-                // validateShowTime(tempDate, times);
+                validateShowTime(tempDate, times);
 
                 const overlap = await checkOverlap(tempDate, times);
                 if (overlap.hasOverlap) {
@@ -164,7 +164,7 @@ exports.createShowtime = async (req, res, next) => {
             return res.status(201).json({ success: true, count: showtimes.length, data: showtimes });
         } else {
             // Validation for single creation
-            // validateShowTime(date, times);
+            validateShowTime(date, times);
 
             // Check overlap for single creation
             const overlap = await checkOverlap(date, times);
